@@ -1,0 +1,237 @@
+# %%
+from pathlib import Path
+
+import polars as pl
+from reportlab.graphics import renderPDF
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Frame, Image, Paragraph, Table, TableStyle
+from svglib.svglib import svg2rlg
+
+
+class PageGrid:
+    """
+    Flexible ReportLab layout helper.
+    Supports text, SVG, PNG, and Polars DataFrames positioned
+    on a fine-grained grid (n_rows × n_cols) with spanning via row/col ranges.
+    """
+
+    def __init__(
+        self,
+        c: canvas.Canvas,
+        n_rows: int,
+        n_cols: int,
+        page_size=A4,
+        margins=(1 * cm, 1 * cm, 1 * cm, 1 * cm),  # (left, right, top, bottom)
+        padding=0.2 * cm,
+        show_grid=False,
+    ):
+        self.c = c
+        self.n_rows = n_rows
+        self.n_cols = n_cols
+        self.page_width, self.page_height = page_size
+        self.left_margin, self.right_margin, self.top_margin, self.bottom_margin = (
+            margins
+        )
+        self.padding = padding
+        self.show_grid = show_grid
+        self.styles = getSampleStyleSheet()
+
+        # Derived geometry
+        self.cell_width = (
+            self.page_width - self.left_margin - self.right_margin
+        ) / n_cols
+        self.cell_height = (
+            self.page_height - self.top_margin - self.bottom_margin
+        ) / n_rows
+
+    # ------------------------------------------------------------------
+    def _normalize_range(self, rng, max_val):
+        if isinstance(rng, int):
+            return rng, rng + 1
+        if isinstance(rng, tuple) and len(rng) == 2:
+            start, end = rng
+            if end <= start:
+                raise ValueError(f"Invalid range {rng}: end must be > start")
+            return start, min(end, max_val)
+        raise TypeError("Row/col must be int or (start, end) tuple")
+
+    def _range_coordinates(self, row, col):
+        row_start, row_end = self._normalize_range(row, self.n_rows)
+        col_start, col_end = self._normalize_range(col, self.n_cols)
+
+        x = self.left_margin + col_start * self.cell_width + self.padding
+        y = (
+            self.page_height
+            - self.top_margin
+            - row_end * self.cell_height
+            + self.padding
+        )
+        width = (col_end - col_start) * self.cell_width - 2 * self.padding
+        height = (row_end - row_start) * self.cell_height - 2 * self.padding
+        return x, y, width, height
+
+    def _aligned_position(
+        self, cell_x, cell_y, cell_w, cell_h, obj_w, obj_h, halign, valign
+    ):
+        if halign == "center":
+            x = cell_x + (cell_w - obj_w) / 2
+        elif halign == "right":
+            x = cell_x + (cell_w - obj_w)
+        else:
+            x = cell_x
+
+        if valign == "middle":
+            y = cell_y + (cell_h - obj_h) / 2
+        elif valign == "top":
+            y = cell_y + (cell_h - obj_h)
+        else:
+            y = cell_y
+        return x, y
+
+    # ------------------------------------------------------------------
+    # === Content methods ===
+    def add_text(self, text, row, col, style=None, halign="left", valign="top"):
+        if style is None:
+            style = self.styles["Normal"]
+        x, y, w, h = self._range_coordinates(row, col)
+        frame = Frame(x, y, w, h, showBoundary=self.show_grid)
+        p = Paragraph(text, style)
+        frame.addFromList([p], self.c)
+
+    def add_svg(
+        self, svg_path, row, col, preserve_aspect=True, halign="center", valign="middle"
+    ):
+        x, y, w, h = self._range_coordinates(row, col)
+        drawing = svg2rlg(str(svg_path))
+        if drawing is None:
+            raise ValueError(f"Could not load SVG: {svg_path}")
+
+        scale_x = w / drawing.width
+        scale_y = h / drawing.height
+        if preserve_aspect:
+            scale = min(scale_x, scale_y)
+            drawing.scale(scale, scale)
+            dw, dh = drawing.width * scale, drawing.height * scale
+        else:
+            drawing.scale(scale_x, scale_y)
+            dw, dh = w, h
+        px, py = self._aligned_position(x, y, w, h, dw, dh, halign, valign)
+        renderPDF.draw(drawing, self.c, px, py)
+        if self.show_grid:
+            self.c.rect(x, y, w, h, stroke=1, fill=0)
+
+    def add_png(
+        self, img_path, row, col, halign="center", valign="middle", preserve_aspect=True
+    ):
+        """Add a raster image (PNG/JPEG)."""
+        x, y, w, h = self._range_coordinates(row, col)
+        img = Image(str(img_path), useDPI=True)
+        iw, ih = img.drawWidth, img.drawHeight
+
+        scale_x = w / iw
+        scale_y = h / ih
+        if preserve_aspect:
+            scale = min(scale_x, scale_y)
+            iw, ih = iw * scale, ih * scale
+        else:
+            iw, ih = w, h
+        px, py = self._aligned_position(x, y, w, h, iw, ih, halign, valign)
+        img.drawWidth, img.drawHeight = iw, ih
+        img.drawOn(self.c, px, py)
+        if self.show_grid:
+            self.c.rect(x, y, w, h, stroke=1, fill=0)
+
+    def add_table(self, df, row, col, font_size=8, halign="center", valign="middle"):
+        if not isinstance(df, pl.DataFrame):
+            raise TypeError("df must be a Polars DataFrame")
+        x, y, w, h = self._range_coordinates(row, col)
+        data = [df.columns] + df.rows()
+        table = Table(data, repeatRows=1)
+        table.setStyle(
+            TableStyle(
+                [
+                    ("FONT", (0, 0), (-1, -1), "Helvetica", font_size),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ]
+            )
+        )
+        tw, th = table.wrap(w, h)
+        if tw > w or th > h:
+            scale = min(w / tw, h / th)
+            tw, th = tw * scale, th * scale
+            self.c.saveState()
+            self.c.scale(scale, scale)
+            px, py = self._aligned_position(
+                x / scale,
+                y / scale,
+                w / scale,
+                h / scale,
+                tw / scale,
+                th / scale,
+                halign,
+                valign,
+            )
+            table.drawOn(self.c, px, py)
+            self.c.restoreState()
+        else:
+            px, py = self._aligned_position(x, y, w, h, tw, th, halign, valign)
+            table.drawOn(self.c, px, py)
+        if self.show_grid:
+            self.c.rect(x, y, w, h, stroke=1, fill=0)
+
+    # ------------------------------------------------------------------
+    def render(self, new_page=True):
+        if new_page:
+            self.c.showPage()
+
+
+if __name__ == "__main__":
+    import numpy as np
+    import polars as pl
+    from reportlab.pdfgen import canvas
+
+    c = canvas.Canvas("chat_report_with_pngs.pdf", pagesize=A4)
+    grid = PageGrid(c, n_rows=12, n_cols=8, show_grid=False)
+
+    styles = grid.styles
+
+    # --- Title (rows 0–2, all columns)
+    grid.add_text(
+        "Chat Analysis Report",
+        row=(0, 2),
+        col=(0, 8),
+        style=styles["Title"],
+        halign="center",
+        valign="middle",
+    )
+
+    # --- Left: SVG, Right: PNG
+    grid.add_png("plots/message_share_pie.png", row=(2, 6), col=(0, 4))
+    grid.add_png("plots/avg_message_length_bar.png", row=(2, 6), col=(4, 8))
+
+    # --- Two tables (rows 6–9)
+    def random_df():
+        return pl.DataFrame(
+            {
+                "User": ["Alice", "Bob", "Charlie"],
+                "Messages": np.random.randint(50, 200, 3),
+                "Share (%)": np.round(np.random.random(3) * 100, 1),
+            }
+        )
+
+    grid.add_table(random_df(), row=(6, 9), col=(0, 4))
+    grid.add_table(random_df(), row=(6, 9), col=(4, 8))
+
+    # --- Bottom: PNG heatmap
+    grid.add_png("plots/messages_per_day_heatmap.png", row=(9, 12), col=(0, 8))
+
+    grid.render(new_page=False)
+    c.save()
+    print("✅ chat_report_with_pngs.pdf generated successfully.")
