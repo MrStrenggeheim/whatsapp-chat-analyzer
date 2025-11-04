@@ -9,6 +9,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import polars as pl
+from numpy.linalg import LinAlgError
 from scipy.stats import gaussian_kde
 
 from preprocess import preprocess
@@ -34,7 +35,7 @@ PLOT_DIR = "plots/"
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 
-def analyze(info):
+def analyze(info, top_n_authors=10):
     df = info["df"]
 
     # overall analyses
@@ -49,6 +50,16 @@ def analyze(info):
     info["author_unique"] = author_unique
     info["min_date"] = df["datetime"].min().date()
     info["max_date"] = df["datetime"].max().date()
+
+    # if too many authors, keep only top N by message count
+    if len(author_unique) > top_n_authors:
+        author_counts = (
+            df.group_by("author").agg(pl.count()).sort("count", descending=True)
+        )
+        top_authors = author_counts.head(top_n_authors)["author"].to_list()
+        df = df.filter(pl.col("author").is_in(top_authors))
+        info["df"] = df
+        info["author_unique"] = sorted(top_authors)
 
     # per author analyses
     author_stats = (
@@ -114,7 +125,7 @@ def plot_charts(info):
         color=author_stats_tmp["author"],
         color_discrete_map=author_color_map,
         range_y=[
-            author_stats_tmp["avg_message_length"].max() * 0.8,
+            author_stats_tmp["avg_message_length"].min() * 0.95,
             author_stats_tmp["avg_message_length"].max() * 1.05,
         ],
     )
@@ -283,12 +294,18 @@ def heatmap_chart(
         index="day_of_week", columns="week_start", values="message_count"
     ).fillna(0)
 
+    # Reindex to ensure all 7 days are present (Polars weekday: 1=Mon, 7=Sun)
+    heatmap_pivot = heatmap_pivot.reindex(range(1, 8), fill_value=0)
+
+    # Day labels
+    day_labels = ["Mon  ", "Tue  ", "Wed  ", "Thu  ", "Fri  ", "Sat  ", "Sun  "]
+
     # Plot
     fig = px.imshow(
         heatmap_pivot,
         labels=dict(x=xaxis_name, y=yaxis_name, color="Anzahl"),
         x=heatmap_pivot.columns,
-        y=["Mon  ", "Tue  ", "Wed  ", "Thu  ", "Fri  ", "Sat  ", "Sun  "],
+        y=day_labels,
         title=title,
         width=width,
         height=height,
@@ -314,6 +331,13 @@ def heatmap_chart(
         fig.show()
 
 
+import numpy as np
+import plotly.graph_objects as go
+import polars as pl
+from numpy.linalg import LinAlgError
+from scipy.stats import gaussian_kde
+
+
 def hourly_kde_chart(
     df: pl.DataFrame,
     time_col: str,
@@ -325,42 +349,62 @@ def hourly_kde_chart(
     author_color_map: dict | None = None,
     width: int = 1500,
     height: int = 350,
+    min_var: float = 1e-3,
 ):
     """
-    Plot KDE distributions of message frequency per hour of day for each author.
+    Plot KDE distributions of message frequency per hour of day per author.
+    If more than 3 authors exist, only the top 2 and the overall average are plotted.
 
     Args:
-        df: Polars DataFrame containing at least time_col and author_col.
+        df: Polars DataFrame containing time_col and author_col.
         time_col: Column name containing datetime values.
         author_col: Column name containing author identifiers.
         title: Plot title.
-        save_path: Optional path to save the figure (e.g. 'plots/hourly_dist.svg').
-        text_font: Font dictionary for axis and legend text.
-        title_font: Font dictionary for the title.
+        save_path: Optional output path (e.g. 'plots/hourly_dist.svg').
+        text_font: Font dict for axis/legend text.
+        title_font: Font dict for the title.
         author_color_map: Optional dict mapping authors to colors (rgb or hex).
         width, height: Figure dimensions in pixels.
+        min_var: Minimum variance threshold for KDE stability.
     """
-    # Compute hour-of-day as continuous value
+    # Compute hour-of-day as float
     hourly_df = df.with_columns(
         (pl.col(time_col).dt.hour() + pl.col(time_col).dt.minute() / 60.0).alias(
             "hour_of_day"
         )
     )
 
-    # Collect unique authors
-    authors = hourly_df.select(pl.col(author_col).unique()).to_series().to_list()
+    # Count messages per author and sort
+    author_counts = (
+        hourly_df.group_by(author_col)
+        .len()
+        .sort("len", descending=True)
+        .to_dict(as_series=False)
+    )
+    authors = author_counts[author_col]
+    counts = author_counts["len"]
 
-    # Prepare plot
+    # Select top 4 + optionally average
+    if len(authors) > 5:
+        authors = authors[:4]
+        plot_average = True
+    else:
+        plot_average = False
+
     fig = go.Figure()
     x = np.linspace(0, 24, 200)
 
-    # KDE per author
+    # Plot per-author KDEs
     for author in authors:
         hours = hourly_df.filter(pl.col(author_col) == author)["hour_of_day"].to_numpy()
-        if len(hours) < 2:
+        if len(hours) < 2 or np.var(hours) < min_var:
             continue
-        kde = gaussian_kde(hours, bw_method="scott")
-        y = kde(x)
+
+        try:
+            kde = gaussian_kde(hours, bw_method="scott")
+            y = kde(x)
+        except LinAlgError:
+            continue
 
         color = (
             author_color_map.get(author, "rgb(100,100,100)")
@@ -374,14 +418,33 @@ def hourly_kde_chart(
                 x=x,
                 y=y,
                 mode="lines",
-                name=author,
+                name=f"{author}",
                 line=dict(width=2, color=color),
                 fill="tozeroy",
                 fillcolor=fill_color,
             )
         )
 
-    # Layout
+    # Add overall average KDE
+    if plot_average:
+        all_hours = hourly_df["hour_of_day"].to_numpy()
+        if len(all_hours) >= 2 and np.var(all_hours) >= min_var:
+            try:
+                kde_avg = gaussian_kde(all_hours, bw_method="scott")
+                y_avg = kde_avg(x)
+                fig.add_trace(
+                    go.Scatter(
+                        x=x,
+                        y=y_avg,
+                        mode="lines",
+                        name="Average",
+                        line=dict(width=3, color="black", dash="dot"),
+                    )
+                )
+            except LinAlgError:
+                pass
+
+    # Layout styling
     fig.update_layout(
         title=title,
         xaxis_title="Hour of the Day",
@@ -390,27 +453,18 @@ def hourly_kde_chart(
         width=width,
         height=height,
         plot_bgcolor="white",
-        xaxis=dict(
-            showgrid=False,
-            zeroline=False,
-            tick0=0,
-            dtick=2,
-        ),
+        xaxis=dict(showgrid=False, zeroline=False, tick0=0, dtick=2),
         yaxis=dict(visible=False),
-        margin=dict(t=70, b=60, l=35, r=35),
+        margin=dict(t=70, b=60, l=25, r=25),
         font=text_font or dict(family="Roboto", size=14, color="#333"),
         title_font=title_font or dict(family="Roboto Black", size=22, color="#333"),
         title_x=0.5,
-        legend=dict(
-            bgcolor="rgba(255,255,255,0.8)",
-            x=0,
-            y=1,
-        ),
+        legend=dict(bgcolor="rgba(255,255,255,0.8)", x=0, y=1),
     )
 
     # Save or show
     if save_path:
-        fig.write_image(save_path, scale=2)
+        fig.write_image(save_path)
     else:
         fig.show()
 

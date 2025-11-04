@@ -220,7 +220,7 @@ if __name__ == "__main__":
     from analyze import analyze, plot_charts
     from preprocess import preprocess
 
-    info = preprocess("./chats/p2p.txt")
+    info = preprocess("./chats/c.txt")
     info = analyze(info)
     plot_charts(info)
     chat_name = info["chat_name"]
@@ -236,7 +236,7 @@ if __name__ == "__main__":
 
     # --- Title (rows 0–2, all columns)
     title_frame = grid.get_frame(row=(0, 2), col=(0, 8))
-    print(styles.list())
+    # print(styles.list())
 
     datespan = f"{info['min_date'].strftime('%d %b %Y')} - {info['max_date'].strftime('%d %b %Y')}"
 
