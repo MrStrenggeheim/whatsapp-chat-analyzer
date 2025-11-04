@@ -2,6 +2,11 @@
 import os
 from pathlib import Path
 
+# sudo apt update
+# sudo apt install libcairo2-dev pkg-config python3-dev
+# plotly_get_chrome
+
+
 import numpy as np
 import polars as pl
 from reportlab.graphics import renderPDF
@@ -216,11 +221,20 @@ class PageGrid:
             self.c.showPage()
 
 
-if __name__ == "__main__":
+
+
+
+def build_report(chat_file_path: str) -> None:
+    """
+    Build a PDF report for a WhatsApp chat.
+
+    Args:
+        chat_file_path: Path to the WhatsApp chat export file.
+    """
     from analyze import analyze, plot_charts
     from preprocess import preprocess
 
-    info = preprocess("./chats/c.txt")
+    info = preprocess(chat_file_path)
     info = analyze(info)
     plot_charts(info)
     chat_name = info["chat_name"]
@@ -288,3 +302,21 @@ if __name__ == "__main__":
     grid.render(new_page=False)
     c.save()
     print("✅ Report generated successfully.")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Generate a PDF report for a WhatsApp chat export."
+    )
+    parser.add_argument(
+        "-f",
+        "--file",
+        type=str,
+        required=True,
+        help="Path to the WhatsApp chat export file (e.g., ./chats/c.txt)",
+    )
+    args = parser.parse_args()
+
+    build_report(args.file)
