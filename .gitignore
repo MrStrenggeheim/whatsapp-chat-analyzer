@@ -2,6 +2,7 @@
 chats/
 plots/
 archive/
+reports/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

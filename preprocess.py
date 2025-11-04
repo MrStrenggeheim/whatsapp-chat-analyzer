@@ -16,10 +16,14 @@ def preprocess(input_file, include_metaAI=False):
         "Sticker",
         "GIF",
         "Dokument",
+        "Kontaktkarte",
     ]
     # make "medium weggelassen" to "<medium>" if medium in medium list
     for m in media_types:
-        chat_str = re.sub(rf"\b{m} weggelassen\b", f"<{m}>", chat_str)
+        chat_str = re.sub(rf"\u200e\b{m} weggelassen\b", f"<{m}>", chat_str)
+
+    chat_str = re.sub(r"[\u2066-\u2069]", "", chat_str)
+    chat_str = re.sub(r"[\p{Cf}]", "", chat_str)
 
     # [dd.mm.yy, hh:mm:ss] author: message
     message_mask = (
@@ -37,13 +41,26 @@ def preprocess(input_file, include_metaAI=False):
     )
 
     # filter out: First author = chatname, Meta AI messages if flag is not set
+    # either group-> multiple authors + metaai, first message is group name
+    # or one-on-one chat -> 2 authors + metaai, first author is other person name
+
     chat_name = df["author"].to_list()[0]
-    author_filter = [chat_name]
+    author_unique = set(df["author"].unique().to_list()) - {"Meta AI"}
+
+    # if authors without meta ai >2 -> group chat
+    if len(author_unique) > 2:
+        is_group = True
+    else:
+        is_group = False
+
+    author_filter = []
+    if is_group:
+        author_filter.append(chat_name)
     if not include_metaAI:
         author_filter.append("Meta AI")
     df = df.filter(~pl.col("author").is_in(author_filter))
 
-    info = {"chat_name": chat_name, "df": df}
+    info = {"chat_name": chat_name, "is_group": is_group, "df": df}
 
     return info
 

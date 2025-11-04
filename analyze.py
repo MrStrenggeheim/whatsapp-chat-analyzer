@@ -2,11 +2,14 @@ import argparse
 import datetime
 import os
 import pickle as pkl
+import re
 from datetime import date
 
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 import polars as pl
+from scipy.stats import gaussian_kde
 
 from preprocess import preprocess
 
@@ -44,6 +47,8 @@ def analyze(info):
     info["total_length"] = total_length
     info["total_days"] = total_days
     info["author_unique"] = author_unique
+    info["min_date"] = df["datetime"].min().date()
+    info["max_date"] = df["datetime"].max().date()
 
     # per author analyses
     author_stats = (
@@ -75,6 +80,8 @@ def analyze(info):
 
 def plot_charts(info):
     df = info["df"]
+    chat_name = info["chat_name"]
+
     author_stats = info["author_stats"]
     author_unique = info["author_unique"]
 
@@ -92,7 +99,7 @@ def plot_charts(info):
         "Share of Messages per Author",
         color_discrete_map=author_color_map,
         color=author_stats_tmp["author"],
-        save_path=os.path.join(PLOT_DIR, "message_share_pie.png"),
+        save_path=os.path.join(PLOT_DIR, f"{chat_name}_message_share_pie.png"),
     )
 
     # bar chart of avg msg length per author
@@ -103,7 +110,7 @@ def plot_charts(info):
         "Durchschnittliche Nachrichtenlänge pro Autor",
         "Autor",
         "Zeichen",
-        save_path=os.path.join(PLOT_DIR, "avg_message_length_bar.png"),
+        save_path=os.path.join(PLOT_DIR, f"{chat_name}_avg_message_length_bar.png"),
         color=author_stats_tmp["author"],
         color_discrete_map=author_color_map,
         range_y=[
@@ -117,8 +124,22 @@ def plot_charts(info):
         df,
         time_col="datetime",
         title="Messages per Day",
-        save_path=os.path.join(PLOT_DIR, "messages_per_day_heatmap.png"),
+        save_path=os.path.join(PLOT_DIR, f"{chat_name}_messages_per_day_heatmap.png"),
         days_back=365,
+        width=1500,
+        height=350,
+    )
+
+    # hourly kde chart
+    hourly_kde_chart(
+        df,
+        time_col="datetime",
+        author_col="author",
+        title="Distribution of Messages over the Day",
+        save_path=os.path.join(
+            PLOT_DIR, f"{chat_name}_hourly_message_distribution.png"
+        ),
+        author_color_map=author_color_map,
         width=1500,
         height=350,
     )
@@ -291,6 +312,109 @@ def heatmap_chart(
         fig.write_image(save_path, scale=2)
     else:
         fig.show()
+
+
+def hourly_kde_chart(
+    df: pl.DataFrame,
+    time_col: str,
+    author_col: str = "author",
+    title: str = "Distribution of Messages over the Day",
+    save_path: str | None = None,
+    text_font: dict | None = None,
+    title_font: dict | None = None,
+    author_color_map: dict | None = None,
+    width: int = 1500,
+    height: int = 350,
+):
+    """
+    Plot KDE distributions of message frequency per hour of day for each author.
+
+    Args:
+        df: Polars DataFrame containing at least time_col and author_col.
+        time_col: Column name containing datetime values.
+        author_col: Column name containing author identifiers.
+        title: Plot title.
+        save_path: Optional path to save the figure (e.g. 'plots/hourly_dist.svg').
+        text_font: Font dictionary for axis and legend text.
+        title_font: Font dictionary for the title.
+        author_color_map: Optional dict mapping authors to colors (rgb or hex).
+        width, height: Figure dimensions in pixels.
+    """
+    # Compute hour-of-day as continuous value
+    hourly_df = df.with_columns(
+        (pl.col(time_col).dt.hour() + pl.col(time_col).dt.minute() / 60.0).alias(
+            "hour_of_day"
+        )
+    )
+
+    # Collect unique authors
+    authors = hourly_df.select(pl.col(author_col).unique()).to_series().to_list()
+
+    # Prepare plot
+    fig = go.Figure()
+    x = np.linspace(0, 24, 200)
+
+    # KDE per author
+    for author in authors:
+        hours = hourly_df.filter(pl.col(author_col) == author)["hour_of_day"].to_numpy()
+        if len(hours) < 2:
+            continue
+        kde = gaussian_kde(hours, bw_method="scott")
+        y = kde(x)
+
+        color = (
+            author_color_map.get(author, "rgb(100,100,100)")
+            if author_color_map
+            else "rgb(100,100,100)"
+        )
+        fill_color = color.replace("rgb", "rgba").replace(")", ",0.2)")
+
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                mode="lines",
+                name=author,
+                line=dict(width=2, color=color),
+                fill="tozeroy",
+                fillcolor=fill_color,
+            )
+        )
+
+    # Layout
+    fig.update_layout(
+        title=title,
+        xaxis_title="Hour of the Day",
+        yaxis_title="Density",
+        template="plotly_white",
+        width=width,
+        height=height,
+        plot_bgcolor="white",
+        xaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            tick0=0,
+            dtick=2,
+        ),
+        yaxis=dict(visible=False),
+        margin=dict(t=70, b=60, l=35, r=35),
+        font=text_font or dict(family="Roboto", size=14, color="#333"),
+        title_font=title_font or dict(family="Roboto Black", size=22, color="#333"),
+        title_x=0.5,
+        legend=dict(
+            bgcolor="rgba(255,255,255,0.8)",
+            x=0,
+            y=1,
+        ),
+    )
+
+    # Save or show
+    if save_path:
+        fig.write_image(save_path, scale=2)
+    else:
+        fig.show()
+
+    return fig
 
 
 if __name__ == "__main__":

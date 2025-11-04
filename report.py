@@ -1,6 +1,8 @@
 # %%
+import os
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 from reportlab.graphics import renderPDF
 from reportlab.lib import colors
@@ -8,15 +10,28 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas
-from reportlab.platypus import Frame, Image, Paragraph, Table, TableStyle
+from reportlab.platypus import (
+    BaseDocTemplate,
+    Frame,
+    Image,
+    PageBreak,
+    PageTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+)
 from svglib.svglib import svg2rlg
+
+styles = getSampleStyleSheet()
+styles.add(styles["Normal"].clone("Center", alignment=1))  # TA_CENTER
 
 
 class PageGrid:
     """
     Flexible ReportLab layout helper.
     Supports text, SVG, PNG, and Polars DataFrames positioned
-    on a fine-grained grid (n_rows × n_cols) with spanning via row/col ranges.
+    on a fine-grained grid (n_rows x n_cols) with spanning via row/col ranges.
     """
 
     def __init__(
@@ -25,7 +40,7 @@ class PageGrid:
         n_rows: int,
         n_cols: int,
         page_size=A4,
-        margins=(1 * cm, 1 * cm, 1 * cm, 1 * cm),  # (left, right, top, bottom)
+        margins=(0.5 * cm, 0.5 * cm, 0.5 * cm, 0.5 * cm),  # (left, right, top, bottom)
         padding=0.2 * cm,
         show_grid=False,
     ):
@@ -38,7 +53,6 @@ class PageGrid:
         )
         self.padding = padding
         self.show_grid = show_grid
-        self.styles = getSampleStyleSheet()
 
         # Derived geometry
         self.cell_width = (
@@ -94,13 +108,23 @@ class PageGrid:
 
     # ------------------------------------------------------------------
     # === Content methods ===
+    def get_frame(self, row, col):
+        x, y, w, h = self._range_coordinates(row, col)
+        frame = Frame(x, y, w, h, showBoundary=self.show_grid)
+        return frame
+
     def add_text(self, text, row, col, style=None, halign="left", valign="top"):
         if style is None:
             style = self.styles["Normal"]
-        x, y, w, h = self._range_coordinates(row, col)
-        frame = Frame(x, y, w, h, showBoundary=self.show_grid)
-        p = Paragraph(text, style)
+        frame = self.get_frame(row, col)
+        if isinstance(text, str):
+            p = Paragraph(text, style)
+        elif isinstance(text, Paragraph):
+            p = text
+        else:
+            raise TypeError("text must be str or Paragraph")
         frame.addFromList([p], self.c)
+        return frame
 
     def add_svg(
         self, svg_path, row, col, preserve_aspect=True, halign="center", valign="middle"
@@ -193,28 +217,50 @@ class PageGrid:
 
 
 if __name__ == "__main__":
-    import numpy as np
-    import polars as pl
-    from reportlab.pdfgen import canvas
+    from analyze import analyze, plot_charts
+    from preprocess import preprocess
 
-    c = canvas.Canvas("chat_report_with_pngs.pdf", pagesize=A4)
+    info = preprocess("./chats/p2p.txt")
+    info = analyze(info)
+    plot_charts(info)
+    chat_name = info["chat_name"]
+    if not info["is_group"]:
+        title_str = " & ".join(info["author_unique"])
+    else:
+        title_str = chat_name
+    df = info["df"]
+
+    os.makedirs("reports", exist_ok=True)
+    c = canvas.Canvas(f"reports/{chat_name}_report.pdf", pagesize=A4)
     grid = PageGrid(c, n_rows=12, n_cols=8, show_grid=False)
 
-    styles = grid.styles
-
     # --- Title (rows 0–2, all columns)
-    grid.add_text(
-        "Chat Analysis Report",
-        row=(0, 2),
-        col=(0, 8),
-        style=styles["Title"],
-        halign="center",
-        valign="middle",
+    title_frame = grid.get_frame(row=(0, 2), col=(0, 8))
+    print(styles.list())
+
+    datespan = f"{info['min_date'].strftime('%d %b %Y')} - {info['max_date'].strftime('%d %b %Y')}"
+
+    if info["is_group"]:
+        subtitle = f"Participants: {len(info['author_unique'])} | Total messages: {info['total_messages']} | Total days: {info['total_days']} | Total length: {info['total_length']} chars"
+    else:
+        subtitle = f"Total messages: {info['total_messages']} | Total days: {info['total_days']} | Total length: {info['total_length']} chars"
+
+    title_frame.addFromList(
+        [
+            Paragraph(title_str, styles["Title"]),
+            Paragraph(subtitle, styles["Center"]),
+            # vspace
+            Spacer(1, 5),
+            Paragraph(datespan, styles["Center"]),
+        ],
+        c,
     )
 
     # --- Left: SVG, Right: PNG
-    grid.add_png("plots/message_share_pie.png", row=(2, 6), col=(0, 4))
-    grid.add_png("plots/avg_message_length_bar.png", row=(2, 6), col=(4, 8))
+    grid.add_png(f"plots/{chat_name}_message_share_pie.png", row=(1, 5), col=(0, 4))
+    grid.add_png(
+        f"plots/{chat_name}_avg_message_length_bar.png", row=(1, 5), col=(4, 8)
+    )
 
     # --- Two tables (rows 6–9)
     def random_df():
@@ -226,12 +272,19 @@ if __name__ == "__main__":
             }
         )
 
-    grid.add_table(random_df(), row=(6, 9), col=(0, 4))
-    grid.add_table(random_df(), row=(6, 9), col=(4, 8))
+    grid.add_table(random_df(), row=(5, 8), col=(0, 4))
+    grid.add_table(random_df(), row=(5, 8), col=(4, 8))
+
+    # -- second bottom: hourly plot
+    grid.add_png(
+        f"plots/{chat_name}_hourly_message_distribution.png", row=(8, 10), col=(0, 8)
+    )
 
     # --- Bottom: PNG heatmap
-    grid.add_png("plots/messages_per_day_heatmap.png", row=(9, 12), col=(0, 8))
+    grid.add_png(
+        f"plots/{chat_name}_messages_per_day_heatmap.png", row=(10, 12), col=(0, 8)
+    )
 
     grid.render(new_page=False)
     c.save()
-    print("✅ chat_report_with_pngs.pdf generated successfully.")
+    print("✅ Report generated successfully.")
