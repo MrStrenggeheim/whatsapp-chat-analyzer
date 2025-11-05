@@ -221,21 +221,19 @@ class PageGrid:
             self.c.showPage()
 
 
-
-
-
-def build_report(chat_file_path: str) -> None:
+def build_report(chat_file_path: str, top_n_authors: int = 10) -> None:
     """
     Build a PDF report for a WhatsApp chat.
 
     Args:
         chat_file_path: Path to the WhatsApp chat export file.
+        top_n_authors: Number of top authors to show individually (default: 10).
     """
     from analyze import analyze, plot_charts
     from preprocess import preprocess
 
     info = preprocess(chat_file_path)
-    info = analyze(info)
+    info = analyze(info, top_n_authors=top_n_authors)
     plot_charts(info)
     chat_name = info["chat_name"]
     if not info["is_group"]:
@@ -317,6 +315,12 @@ if __name__ == "__main__":
         required=True,
         help="Path to the WhatsApp chat export file (e.g., ./chats/c.txt)",
     )
+    parser.add_argument(
+        "--top_n_authors",
+        type=int,
+        default=7,
+        help="Number of top authors to show individually (default: 10)",
+    )
     args = parser.parse_args()
 
-    build_report(args.file)
+    build_report(args.file, top_n_authors=args.top_n_authors)

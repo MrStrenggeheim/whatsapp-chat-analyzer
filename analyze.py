@@ -35,7 +35,7 @@ PLOT_DIR = "plots/"
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 
-def analyze(info, top_n_authors=10):
+def analyze(info, top_n_authors: int = 7):
     df = info["df"]
 
     # overall analyses
@@ -50,16 +50,6 @@ def analyze(info, top_n_authors=10):
     info["author_unique"] = author_unique
     info["min_date"] = df["datetime"].min().date()
     info["max_date"] = df["datetime"].max().date()
-
-    # if too many authors, keep only top N by message count
-    if len(author_unique) > top_n_authors:
-        author_counts = (
-            df.group_by("author").agg(pl.count()).sort("count", descending=True)
-        )
-        top_authors = author_counts.head(top_n_authors)["author"].to_list()
-        df = df.filter(pl.col("author").is_in(top_authors))
-        info["df"] = df
-        info["author_unique"] = sorted(top_authors)
 
     # per author analyses
     author_stats = (
@@ -85,7 +75,36 @@ def analyze(info, top_n_authors=10):
         )
         .with_columns((pl.col("sessions") / total_days).alias("avg_sessions_per_day"))
     )
-    info["author_stats"] = author_stats
+
+    # Determine top N authors by message count and group the rest
+    if author_stats.height > top_n_authors:
+        author_stats_sorted = author_stats.sort("message_count", descending=True)
+        top_authors = author_stats_sorted.head(top_n_authors)
+        other_authors = author_stats_sorted.tail(author_stats.height - top_n_authors)
+
+        # Aggregate "Other" category using Polars aggregation to preserve types
+        other_row = other_authors.select(
+            [
+                pl.lit("Other").alias("author"),
+                pl.col("message_count").sum().alias("message_count"),
+                pl.col("message_share").sum().alias("message_share"),
+                (
+                    pl.col("total_message_length").sum() / pl.col("message_count").sum()
+                ).alias("avg_message_length"),
+                pl.col("total_message_length").sum().alias("total_message_length"),
+                pl.col("time_in_chat").sum().alias("time_in_chat"),
+                pl.col("sessions").sum().alias("sessions"),
+                pl.col("active_days").sum().alias("active_days"),
+                pl.col("avg_sessions_per_day").mean().alias("avg_sessions_per_day"),
+            ]
+        )
+
+        author_stats_grouped = pl.concat([top_authors, other_row])
+    else:
+        author_stats_grouped = author_stats
+
+    info["author_stats"] = author_stats  # Full stats for all authors
+    info["author_stats_grouped"] = author_stats_grouped  # Top N + "Other"
     return info
 
 
@@ -93,70 +112,102 @@ def plot_charts(info):
     df = info["df"]
     chat_name = info["chat_name"]
 
-    author_stats = info["author_stats"]
-    author_unique = info["author_unique"]
+    author_stats_grouped = info["author_stats_grouped"]
+    author_unique = sorted(author_stats_grouped["author"].to_list())
 
     # colorscale = px.colors.sequential.Blues
     colors = px.colors.sample_colorscale(
         colorscale, np.linspace(0, 1, len(author_unique))
     )
+    # map authors to colors for top n authors + other
     author_color_map = {author: color for author, color in zip(author_unique, colors)}
+    author_color_map["Other"] = "#999999"  # Gray for "Other" category
 
-    # pie chart of shares in chat
-    author_stats_tmp = author_stats.sort("message_share", descending=True)
+    # Pie chart: sorted by message share
+    author_stats_sorted = author_stats_grouped.sort("message_share", descending=True)
     pie_chart(
-        author_stats_tmp["message_count"],
-        author_stats_tmp["author"],
-        "Share of Messages per Author",
+        values=author_stats_sorted["message_count"].to_list(),
+        labels=author_stats_sorted["author"].to_list(),
+        title="Share of Messages",
         color_discrete_map=author_color_map,
-        color=author_stats_tmp["author"],
+        color=author_stats_sorted["author"].to_list(),
         save_path=os.path.join(PLOT_DIR, f"{chat_name}_message_share_pie.png"),
     )
 
-    # bar chart of avg msg length per author
-    author_stats_tmp = author_stats.sort("avg_message_length", descending=True)
+    # Bar chart: sorted by avg message length
+    author_stats_sorted = author_stats_grouped.sort(
+        "avg_message_length", descending=True
+    )
     bar_chart(
-        author_stats_tmp["author"],
-        author_stats_tmp["avg_message_length"],
-        "Durchschnittliche Nachrichtenlänge pro Autor",
-        "Autor",
-        "Zeichen",
+        author_stats_sorted["author"].to_list(),
+        author_stats_sorted["avg_message_length"].to_list(),
+        title="Average Message Length",
+        x_title=None,
+        y_title="Characters",
         save_path=os.path.join(PLOT_DIR, f"{chat_name}_avg_message_length_bar.png"),
-        color=author_stats_tmp["author"],
+        color=author_stats_sorted["author"].to_list(),
         color_discrete_map=author_color_map,
         range_y=[
-            author_stats_tmp["avg_message_length"].min() * 0.95,
-            author_stats_tmp["avg_message_length"].max() * 1.05,
+            author_stats_sorted["avg_message_length"].min() * 0.95,
+            author_stats_sorted["avg_message_length"].max() * 1.05,
         ],
     )
 
-    # heatmap of messages per day
-    heatmap_chart(
-        df,
-        time_col="datetime",
-        title="Messages per Day",
-        save_path=os.path.join(PLOT_DIR, f"{chat_name}_messages_per_day_heatmap.png"),
-        days_back=365,
-        width=1500,
-        height=350,
-    )
+    # # heatmap of messages per day
+    # heatmap_chart(
+    #     df,
+    #     time_col="datetime",
+    #     title="Messages per Day",
+    #     save_path=os.path.join(PLOT_DIR, f"{chat_name}_messages_per_day_heatmap.png"),
+    #     days_back=365,
+    #     width=1500,
+    #     height=350,
+    # )
 
-    # hourly kde chart
-    hourly_kde_chart(
-        df,
-        time_col="datetime",
-        author_col="author",
-        title="Distribution of Messages over the Day",
-        save_path=os.path.join(
-            PLOT_DIR, f"{chat_name}_hourly_message_distribution.png"
-        ),
-        author_color_map=author_color_map,
-        width=1500,
-        height=350,
-    )
+    # # hourly kde chart
+    # hourly_kde_chart(
+    #     df,
+    #     time_col="datetime",
+    #     author_col="author",
+    #     title="Distribution of Messages over the Day",
+    #     save_path=os.path.join(
+    #         PLOT_DIR, f"{chat_name}_hourly_message_distribution.png"
+    #     ),
+    #     author_color_map=author_color_map,
+    #     width=1500,
+    #     height=350,
+    # )
 
 
 def pie_chart(values, labels, title, save_path=None, **kwargs):
+    """
+    Create a pie chart with conditional labeling.
+    Slices >10% show labels inside, smaller slices appear in legend only.
+
+    Args:
+        values: List/array of values to plot.
+        labels: List/array of labels corresponding to values.
+        title: Chart title.
+        save_path: Optional path to save the figure.
+        **kwargs: Additional arguments passed to px.pie (e.g., color_discrete_map).
+    """
+    # Calculate percentages to determine which labels to show inside
+    total = sum(values)
+    percentages = [v / total * 100 for v in values]
+
+    # Create custom text based on percentage threshold
+    text_labels = []
+    show_legend_flags = []
+    for i, (label, value, pct) in enumerate(zip(labels, values, percentages)):
+        if pct > 10:
+            # Show full info for large slices
+            text_labels.append(f"{label}<br>{value}<br>{pct:.1f}%")
+            show_legend_flags.append(False)
+        else:
+            # Show only percentage for small slices
+            text_labels.append(f"{pct:.1f}% {label}")
+            show_legend_flags.append(True)
+
     fig = px.pie(
         names=labels,
         values=values,
@@ -166,16 +217,21 @@ def pie_chart(values, labels, title, save_path=None, **kwargs):
         hole=0.3,
         **(kwargs),
     )
+
     # display total amount in center
-    total = sum(values)
     fig.add_annotation(
         dict(
             text=f"Total<br><b>{total}</b>", x=0.5, y=0.5, font_size=18, showarrow=False
         )
     )
+
+    # Update text display
     fig.update_traces(
-        textinfo="label+percent+value"
-    )  # , insidetextorientation='horizontal', textposition='inside')
+        text=text_labels,
+        textinfo="text",
+        textposition="inside",
+    )
+
     fig.update_layout(
         showlegend=False,
         plot_bgcolor="white",
@@ -192,15 +248,27 @@ def pie_chart(values, labels, title, save_path=None, **kwargs):
         fig.show()
 
 
-def bar_chart(x, y, title, x_title, y_title, save_path=None, **kwargs):
-    fig = px.bar(x=x, y=y, title=title, width=512, height=512, **(kwargs))
+def bar_chart(labels, values, title, x_title, y_title, save_path=None, **kwargs):
+    """
+    Create a bar chart.
+
+    Args:
+        labels: List/array of x-axis labels (categories).
+        values: List/array of y-axis values (numeric).
+        title: Chart title.
+        x_title: X-axis label.
+        y_title: Y-axis label.
+        save_path: Optional path to save the figure.
+        **kwargs: Additional arguments passed to px.bar (e.g., color_discrete_map).
+    """
+    fig = px.bar(x=labels, y=values, title=title, width=512, height=512, **(kwargs))
     fig.update_layout(
         plot_bgcolor="white",
         xaxis_title=x_title,
         yaxis_title=y_title,
         showlegend=False,
         autosize=True,
-        margin=dict(t=50, b=60, l=65, r=20),
+        margin=dict(t=60, b=50, l=65, r=20),
         title_x=0.5,
         title_y=0.95,
         font=text_font,
@@ -477,10 +545,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--include_metaAI", action="store_true", help="Include messages from Meta AI"
     )
+    parser.add_argument(
+        "--top_n_authors",
+        type=int,
+        default=10,
+        help="Number of top authors to show individually (default: 10)",
+    )
     args = parser.parse_args()
 
     info = preprocess(args.input_file, args.include_metaAI)
-    info = analyze(info)
+    info = analyze(info, top_n_authors=args.top_n_authors)
     plot_charts(info)
 
     pkl.dump(info, open(f"{args.input_file.replace('.txt', '')}_analyzed.pkl", "wb"))
