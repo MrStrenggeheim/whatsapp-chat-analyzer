@@ -186,7 +186,7 @@ class PageGrid:
                     ("FONT", (0, 0), (-1, -1), "Helvetica", font_size),
                     ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
                     ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ]
             )
@@ -244,10 +244,10 @@ def build_report(chat_file_path: str, top_n_authors: int = 10) -> None:
 
     os.makedirs("reports", exist_ok=True)
     c = canvas.Canvas(f"reports/{chat_name}_report.pdf", pagesize=A4)
-    grid = PageGrid(c, n_rows=12, n_cols=8, show_grid=False)
+    grid = PageGrid(c, n_rows=12, n_cols=12, show_grid=False)
 
     # --- Title (rows 0–2, all columns)
-    title_frame = grid.get_frame(row=(0, 2), col=(0, 8))
+    title_frame = grid.get_frame(row=(0, 2), col=(0, 12))
     # print(styles.list())
 
     datespan = f"{info['min_date'].strftime('%d %b %Y')} - {info['max_date'].strftime('%d %b %Y')}"
@@ -268,33 +268,55 @@ def build_report(chat_file_path: str, top_n_authors: int = 10) -> None:
         c,
     )
 
-    # --- Left: SVG, Right: PNG
-    grid.add_png(f"plots/{chat_name}_message_share_pie.png", row=(1, 5), col=(0, 4))
+    # --- Left: pie chart, Right: bar chart
+    grid.add_png(f"plots/{chat_name}_message_share_pie.png", row=(1, 5), col=(0, 6))
     grid.add_png(
-        f"plots/{chat_name}_avg_message_length_bar.png", row=(1, 5), col=(4, 8)
+        f"plots/{chat_name}_avg_message_length_bar.png", row=(1, 5), col=(6, 12)
     )
 
-    # --- Two tables (rows 6–9)
-    def random_df():
-        return pl.DataFrame(
-            {
-                "User": ["Alice", "Bob", "Charlie"],
-                "Messages": np.random.randint(50, 200, 3),
-                "Share (%)": np.round(np.random.random(3) * 100, 1),
-            }
-        )
+    # left emoji bar plot, right table
+    grid.add_png(f"plots/{chat_name}_common_emojis_bar.png", row=(5, 8), col=(0, 7))
 
-    grid.add_table(random_df(), row=(5, 8), col=(0, 4))
-    grid.add_table(random_df(), row=(5, 8), col=(4, 8))
-
-    # -- second bottom: hourly plot
-    grid.add_png(
-        f"plots/{chat_name}_hourly_message_distribution.png", row=(8, 10), col=(0, 8)
+    # --- Table with random data (placeholder)
+    table_rows = [
+        (f"This is some nice statistic here\nand even another line here", 12),
+        (f"Also, another statistic there", 34),
+        (f"And yet another one", 56),
+        (f"And one with more text to describe \nthe genius of this stat", 78),
+        (f"This is some nice statistic here", 12),
+        (f"Also, another statistic there", 34),
+        (f"And yet another one", 56),
+        (f"And one with more text to describe the genius of this statistic", 78),
+        (f"This is some nice statistic here\nand even another line here", 12),
+        (f"Also, another statistic there", 34),
+        (f"And yet another one", 56),
+        (f"And one with more text to describe \nthe genius of this stat", 78),
+        (f"This is some nice statistic here", 12),
+        (f"Also, another statistic there", 34),
+        (f"And yet another one", 56),
+        (f"And one with more text to describe the genius of this statistic", 78),
+        (f"This is some nice statistic here", 12),
+        (f"Also, another statistic there", 34),
+        (f"And yet another one", 56),
+        (f"And one with more text to describe the genius of this statistic", 78),
+    ]
+    table_df = pl.DataFrame(
+        {
+            "Statistic": [row[0] for row in table_rows],
+            "Value": [row[1] for row in table_rows],
+        }
     )
 
-    # --- Bottom: PNG heatmap
+    grid.add_table(table_df, row=(5, 10), col=(7, 12))
+
+    # -- hourly plot (full width)
     grid.add_png(
-        f"plots/{chat_name}_messages_per_day_heatmap.png", row=(10, 12), col=(0, 8)
+        f"plots/{chat_name}_hourly_message_distribution.png", row=(8, 10), col=(0, 7)
+    )
+
+    # --- Bottom: PNG heatmap (full width)
+    grid.add_png(
+        f"plots/{chat_name}_messages_per_day_heatmap.png", row=(10, 12), col=(0, 12)
     )
 
     grid.render(new_page=False)

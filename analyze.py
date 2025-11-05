@@ -2,8 +2,9 @@ import argparse
 import datetime
 import os
 import pickle as pkl
-import re
+import regex as re
 from datetime import date
+from typing import Counter
 
 import numpy as np
 import plotly.express as px
@@ -153,30 +154,53 @@ def plot_charts(info):
         ],
     )
 
-    # # heatmap of messages per day
-    # heatmap_chart(
-    #     df,
-    #     time_col="datetime",
-    #     title="Messages per Day",
-    #     save_path=os.path.join(PLOT_DIR, f"{chat_name}_messages_per_day_heatmap.png"),
-    #     days_back=365,
-    #     width=1500,
-    #     height=350,
-    # )
+    # bar chart of emoji usage
+    whole_text = " ".join(df["message"].to_list())
+    emojis = re.findall(r"\p{Extended_Pictographic}", whole_text)
+    # count emojis
+    emojis_counter = Counter(emojis)
+    common_emojis = emojis_counter.most_common(15)
+    e, ec = zip(*common_emojis)
+    emoji_color_map = px.colors.sample_colorscale(colorscale, np.linspace(0, 1, len(e)))
+    emoji_color_map = {e: color for e, color in zip(e, emoji_color_map)}
+    bar_chart(
+        e,
+        ec,
+        "Most Common Emojis in Chat",
+        x_title=None,
+        y_title="Count",
+        save_path=os.path.join(PLOT_DIR, f"{chat_name}_common_emojis_bar.png"),
+        color=e,
+        color_discrete_map=emoji_color_map,
+        width=800,
+        height=500,
+        number_format="d",  # Integer format for emoji counts
+    )
 
-    # # hourly kde chart
-    # hourly_kde_chart(
-    #     df,
-    #     time_col="datetime",
-    #     author_col="author",
-    #     title="Distribution of Messages over the Day",
-    #     save_path=os.path.join(
-    #         PLOT_DIR, f"{chat_name}_hourly_message_distribution.png"
-    #     ),
-    #     author_color_map=author_color_map,
-    #     width=1500,
-    #     height=350,
-    # )
+    # heatmap of messages per day
+    heatmap_chart(
+        df,
+        time_col="datetime",
+        title="Messages per Day",
+        save_path=os.path.join(PLOT_DIR, f"{chat_name}_messages_per_day_heatmap.png"),
+        days_back=365,
+        width=1400,
+        height=300,
+    )
+
+    # hourly kde chart
+    hourly_kde_chart(
+        df,
+        time_col="datetime",
+        author_col="author",
+        title="Distribution of Messages over the Day",
+        save_path=os.path.join(
+            PLOT_DIR, f"{chat_name}_hourly_message_distribution.png"
+        ),
+        author_color_map=author_color_map,
+        width=800,
+        height=300,
+    )
 
 
 def pie_chart(values, labels, title, save_path=None, **kwargs):
@@ -248,7 +272,18 @@ def pie_chart(values, labels, title, save_path=None, **kwargs):
         fig.show()
 
 
-def bar_chart(labels, values, title, x_title, y_title, save_path=None, **kwargs):
+def bar_chart(
+    labels,
+    values,
+    title,
+    x_title,
+    y_title,
+    width=512,
+    height=512,
+    save_path=None,
+    number_format=".0f",
+    **kwargs,
+):
     """
     Create a bar chart.
 
@@ -258,10 +293,16 @@ def bar_chart(labels, values, title, x_title, y_title, save_path=None, **kwargs)
         title: Chart title.
         x_title: X-axis label.
         y_title: Y-axis label.
+        width: Chart width in pixels.
+        height: Chart height in pixels.
         save_path: Optional path to save the figure.
+        number_format: Format string for numbers on bars (default ".0f" for integers).
+                       Use ".1f" for one decimal, "d" for integers, etc.
         **kwargs: Additional arguments passed to px.bar (e.g., color_discrete_map).
     """
-    fig = px.bar(x=labels, y=values, title=title, width=512, height=512, **(kwargs))
+    fig = px.bar(
+        x=labels, y=values, title=title, width=width, height=height, **(kwargs)
+    )
     fig.update_layout(
         plot_bgcolor="white",
         xaxis_title=x_title,
@@ -274,8 +315,8 @@ def bar_chart(labels, values, title, x_title, y_title, save_path=None, **kwargs)
         font=text_font,
         title_font=title_font,
     )
-    # display count on top of bars in x.x format
-    fig.update_traces(texttemplate="%{y:.1f}", textposition="outside")
+    # display count on top of bars with specified format
+    fig.update_traces(texttemplate=f"%{{y:{number_format}}}", textposition="outside")
     if save_path:
         fig.write_image(save_path, scale=2)
     else:
