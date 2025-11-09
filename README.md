@@ -1,8 +1,7 @@
 # whatsapp-chat-analyzer
 Tool to get insights into a whatsapp chat.
 
-![showcase](showcase.png){width="600"}
-
+[<img src="./showcase.png" width="450px"/>](./showcase.png)
 
 ## Usage
 1. Clone the repository and install the required dependencies.

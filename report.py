@@ -216,13 +216,16 @@ class PageGrid:
 # ------------------------------------------------------------------
 # ------------------------------------------------------------------
 # ------------------------------------------------------------------
-def build_report(chat_file_path: str, top_n_authors: int = 10) -> None:
+def build_report(
+    chat_file_path: str, top_n_authors: int = 10, output_file: str = None
+) -> None:
     """
     Build a PDF report for a WhatsApp chat.
 
     Args:
         chat_file_path: Path to the WhatsApp chat export file.
         top_n_authors: Number of top authors to show individually (default: 10).
+        output_file: Path to the output PDF file (default: reports/{chat_name}_report.pdf).
     """
     from analyze import analyze, plot_charts
     from preprocess import preprocess
@@ -236,8 +239,18 @@ def build_report(chat_file_path: str, top_n_authors: int = 10) -> None:
     else:
         title_str = chat_name
 
-    os.makedirs("reports", exist_ok=True)
-    c = canvas.Canvas(f"reports/{chat_name}_report.pdf", pagesize=A4)
+    # Determine output path
+    if output_file is None:
+        os.makedirs("reports", exist_ok=True)
+        output_file = f"reports/{chat_name}_report.pdf"
+    else:
+        # Create parent directory if it doesn't exist
+        output_dir = os.path.dirname(output_file)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+    c = canvas.Canvas(output_file, pagesize=A4)
+    c.setTitle(f"{chat_name} - Chat Report")
     grid = PageGrid(c, n_rows=12, n_cols=12, show_grid=False)
 
     # --- Title (rows 0–2, all columns)
@@ -316,7 +329,7 @@ def build_report(chat_file_path: str, top_n_authors: int = 10) -> None:
 
     grid.render(new_page=False)
     c.save()
-    print("✅ Report generated successfully.")
+    print(f"✅ Report generated successfully: {output_file}")
 
 
 if __name__ == "__main__":
@@ -333,6 +346,13 @@ if __name__ == "__main__":
         help="Path to the WhatsApp chat export file (e.g., ./chats/c.txt)",
     )
     parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        default=None,
+        help="Path to the output PDF file (default: reports/{chat_name}_report.pdf)",
+    )
+    parser.add_argument(
         "--top_n_authors",
         type=int,
         default=7,
@@ -340,4 +360,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    build_report(args.file, top_n_authors=args.top_n_authors)
+    build_report(args.file, top_n_authors=args.top_n_authors, output_file=args.output)
