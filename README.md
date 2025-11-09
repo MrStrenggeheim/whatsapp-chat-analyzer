@@ -1,6 +1,8 @@
 # whatsapp-chat-analyzer
 Tool to get insights into a whatsapp chat.
 
+![showcase](showcase.png){width="600"}
+
 
 ## Usage
 1. Clone the repository and install the required dependencies.
