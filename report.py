@@ -1,13 +1,6 @@
 # %%
 import os
-from pathlib import Path
 
-# sudo apt update
-# sudo apt install libcairo2-dev pkg-config python3-dev
-# plotly_get_chrome
-
-
-import numpy as np
 import polars as pl
 from reportlab.graphics import renderPDF
 from reportlab.lib import colors
@@ -174,23 +167,22 @@ class PageGrid:
         if self.show_grid:
             self.c.rect(x, y, w, h, stroke=1, fill=0)
 
-    def add_table(self, df, row, col, font_size=8, halign="center", valign="middle"):
-        if not isinstance(df, pl.DataFrame):
-            raise TypeError("df must be a Polars DataFrame")
+    def add_table(self, table, row, col, font_size=8, halign="center", valign="middle"):
+        if isinstance(table, pl.DataFrame):
+            data = [table.columns] + table.rows()
+            table = Table(data, repeatRows=0)
         x, y, w, h = self._range_coordinates(row, col)
-        data = [df.columns] + df.rows()
-        table = Table(data, repeatRows=1)
-        table.setStyle(
-            TableStyle(
-                [
-                    ("FONT", (0, 0), (-1, -1), "Helvetica", font_size),
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-                    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ]
-            )
-        )
+        # table.setStyle(
+        #     TableStyle(
+        #         [
+        #             ("FONT", (0, 0), (-1, -1), "Helvetica", font_size),
+        #             ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+        #             ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        #             ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        #             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        #         ]
+        #     )
+        # )
         tw, th = table.wrap(w, h)
         if tw > w or th > h:
             scale = min(w / tw, h / th)
@@ -221,6 +213,9 @@ class PageGrid:
             self.c.showPage()
 
 
+# ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# ------------------------------------------------------------------
 def build_report(chat_file_path: str, top_n_authors: int = 10) -> None:
     """
     Build a PDF report for a WhatsApp chat.
@@ -240,7 +235,6 @@ def build_report(chat_file_path: str, top_n_authors: int = 10) -> None:
         title_str = " & ".join(info["author_unique"])
     else:
         title_str = chat_name
-    df = info["df"]
 
     os.makedirs("reports", exist_ok=True)
     c = canvas.Canvas(f"reports/{chat_name}_report.pdf", pagesize=A4)
@@ -278,36 +272,37 @@ def build_report(chat_file_path: str, top_n_authors: int = 10) -> None:
     grid.add_png(f"plots/{chat_name}_common_emojis_bar.png", row=(5, 8), col=(0, 7))
 
     # --- Table with random data (placeholder)
-    table_rows = [
-        (f"This is some nice statistic here\nand even another line here", 12),
-        (f"Also, another statistic there", 34),
-        (f"And yet another one", 56),
-        (f"And one with more text to describe \nthe genius of this stat", 78),
-        (f"This is some nice statistic here", 12),
-        (f"Also, another statistic there", 34),
-        (f"And yet another one", 56),
-        (f"And one with more text to describe the genius of this statistic", 78),
-        (f"This is some nice statistic here\nand even another line here", 12),
-        (f"Also, another statistic there", 34),
-        (f"And yet another one", 56),
-        (f"And one with more text to describe \nthe genius of this stat", 78),
-        (f"This is some nice statistic here", 12),
-        (f"Also, another statistic there", 34),
-        (f"And yet another one", 56),
-        (f"And one with more text to describe the genius of this statistic", 78),
-        (f"This is some nice statistic here", 12),
-        (f"Also, another statistic there", 34),
-        (f"And yet another one", 56),
-        (f"And one with more text to describe the genius of this statistic", 78),
-    ]
-    table_df = pl.DataFrame(
-        {
-            "Statistic": [row[0] for row in table_rows],
-            "Value": [row[1] for row in table_rows],
-        }
+    media_counts = sorted(
+        info["media_counts"].items(), key=lambda x: x[1], reverse=True
     )
+    data = [
+        ["Metric", "", "Value"],
+    ]
+    # in order of count descending
+    num_media_types = len(media_counts)
+    if num_media_types > 0:
+        for media_type, count in media_counts:
+            data.append(["Media", f"{media_type}", f"{count}"])
+    else:
+        data.append(["Media", "All Types", "0"])
+        num_media_types = 1
 
-    grid.add_table(table_df, row=(5, 10), col=(7, 12))
+    table = Table(data, repeatRows=0)
+    table.setStyle(
+        TableStyle(
+            [
+                ("SPAN", (0, 0), (1, 0)),
+                ("SPAN", (0, 1), (0, num_media_types)),
+                ("LINEBELOW", (0, 0), (-1, 0), 1, colors.black),
+                ("LINEAFTER", (1, 0), (1, -1), 1, colors.black),
+                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                ("ALIGN", (0, 1), (-1, -1), "LEFT"),
+                ("ALIGN", (2, 1), (-1, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
+    grid.add_table(table, row=(5, 8), col=(7, 12), font_size=8)
 
     # -- hourly plot (full width)
     grid.add_png(

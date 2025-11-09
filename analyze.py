@@ -2,7 +2,6 @@ import argparse
 import datetime
 import os
 import pickle as pkl
-import regex as re
 from datetime import date
 from typing import Counter
 
@@ -10,6 +9,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import polars as pl
+import regex as re
 from numpy.linalg import LinAlgError
 from scipy.stats import gaussian_kde
 
@@ -112,6 +112,7 @@ def analyze(info, top_n_authors: int = 7):
 def plot_charts(info):
     df = info["df"]
     chat_name = info["chat_name"]
+    whole_text = " ".join(df["message"].to_list())
 
     author_stats_grouped = info["author_stats_grouped"]
     author_unique = sorted(author_stats_grouped["author"].to_list())
@@ -155,7 +156,6 @@ def plot_charts(info):
     )
 
     # bar chart of emoji usage
-    whole_text = " ".join(df["message"].to_list())
     emojis = re.findall(r"\p{Extended_Pictographic}", whole_text)
     # count emojis
     emojis_counter = Counter(emojis)

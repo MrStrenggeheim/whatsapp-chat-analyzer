@@ -1,5 +1,7 @@
 import argparse
+import datetime
 import pickle as pkl
+from collections import Counter
 
 import polars as pl
 import regex as re
@@ -8,20 +10,40 @@ import regex as re
 def preprocess(input_file, include_metaAI=False):
     with open(input_file, "r", encoding="utf-8") as f:
         chat_str = f.read()
-    chat_str = re.sub(r"[\p{Cf}]", "", chat_str)
-    media_types = [
-        "Video",
-        "Audio",
-        "Bild",
-        "Sticker",
-        "GIF",
-        "Dokument",
-        "Kontaktkarte",
-    ]
-    # make "medium weggelassen" to "<medium>" if medium in medium list
-    for m in media_types:
-        chat_str = re.sub(rf"\u200e\b{m} weggelassen\b", f"<{m}>", chat_str)
 
+    info = {}
+
+    # Count media types and call time
+    media_counts = Counter()
+    call_time = Counter()
+    media_pattern = r"^\u200e(.*?)\u200e(\w+)\s\w+$"
+    call_pattern = r": \u200e(\w+)\. \u200e\u200e(\d+)\s(\w+)\.\s\u2022.*$"
+
+    def replace_media(match):
+        key = match.group(2)
+        media_counts[key] += 1
+        return f"{match.group(1)}<{key}>"
+
+    def replace_call(match):
+        key = match.group(1)
+        call_time[match.group(3)] += int(match.group(2))
+        media_counts[key] += 1
+        return f": <{key}>"
+
+    chat_str = re.sub(media_pattern, replace_media, chat_str, flags=re.MULTILINE)
+    chat_str = re.sub(call_pattern, replace_call, chat_str, flags=re.MULTILINE)
+
+    total_time_called = int(
+        datetime.timedelta(
+            hours=call_time.get("Std", 0),
+            minutes=call_time.get("Min", 0),
+            seconds=call_time.get("Sek", 0),
+        ).total_seconds()
+    )
+    H = total_time_called // 3600
+    M = (total_time_called % 3600) // 60
+
+    # remove LTR/RTL markers
     chat_str = re.sub(r"[\u2066-\u2069]", "", chat_str)
     chat_str = re.sub(r"[\p{Cf}]", "", chat_str)
 
@@ -60,7 +82,11 @@ def preprocess(input_file, include_metaAI=False):
         author_filter.append("Meta AI")
     df = df.filter(~pl.col("author").is_in(author_filter))
 
-    info = {"chat_name": chat_name, "is_group": is_group, "df": df}
+    info["chat_name"] = chat_name
+    info["is_group"] = is_group
+    info["df"] = df
+    info["media_counts"] = media_counts
+    info["total_call_time"] = {"h": H, "m": M}
 
     return info
 
